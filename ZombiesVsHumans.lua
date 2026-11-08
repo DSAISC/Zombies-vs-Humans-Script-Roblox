@@ -1,12 +1,10 @@
 getgenv().deletewhendupefound = true
 
--- ================= 加载 WindUI =================
 local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
 
 local Window = WindUI:CreateWindow({
     Title = "Zombies Vs Humans (2AreYouMental110)",
     Icon = "lucide-skull",
-    Author = "WindUI 中文移植版",
     Folder = "ZVH_CN",
     Size = UDim2.fromOffset(640, 500),
     Transparent = true,
@@ -18,6 +16,7 @@ local Window = WindUI:CreateWindow({
 local MainTab     = Window:Tab({ Title = "主菜单",   Icon = "lucide-home" })
 local MovementTab = Window:Tab({ Title = "移动",     Icon = "lucide-move-3d" })
 local EspTab      = Window:Tab({ Title = "ESP",      Icon = "lucide-eye" })
+local HitboxTab   = Window:Tab({ Title = "碰撞箱",   Icon = "lucide-box" })
 local AntiTab     = Window:Tab({ Title = "防封",     Icon = "lucide-shield" })
 local WeldTab     = Window:Tab({ Title = "人体焊接", Icon = "lucide-link" })
 local OtherTab    = Window:Tab({ Title = "其他脚本", Icon = "lucide-file-code" })
@@ -27,20 +26,14 @@ local on = true
 local toc = {}
 local CurrentWeld = nil
 
--- ===== 兼容辅助：Paragraph 动态更新（防御多版本 API） =====
 local function setPara(obj, title, desc)
     if not obj then return end
     local ok = pcall(function() obj:SetTitle(title) end)
     if not ok then ok = pcall(function() obj:SetDesc(title) end) end
     if not ok then pcall(function() obj:Update({ Title = title }) end) end
-    if desc ~= nil then
-        pcall(function() obj:SetDesc(desc) end)
-    end
+    if desc ~= nil then pcall(function() obj:SetDesc(desc) end) end
 end
 
--- ================================================================
--- 主菜单
--- ================================================================
 MainTab:Section({ Title = "警告" })
 MainTab:Paragraph({
     Title = "⚠️ 警告",
@@ -91,23 +84,22 @@ MainTab:Input({
     Callback = function(txt)
         txt = tonumber(txt)
         if not txt then return end
-        for _, v in pairs(game:GetService("ReplicatedStorage").Modules.ItemData:GetChildren()) do
-            if v:IsA("ModuleScript") then
-                local r = require(v)
-                if r.Swings then
-                    for _, v2 in pairs(r.Swings) do v2.SwingCooldown = txt end
+        pcall(function()
+            for _, v in pairs(game:GetService("ReplicatedStorage").Modules.ItemData:GetChildren()) do
+                if v:IsA("ModuleScript") then
+                    local r = require(v)
+                    if r.Swings then
+                        for _, v2 in pairs(r.Swings) do v2.SwingCooldown = txt end
+                    end
                 end
             end
-        end
+        end)
     end,
 })
 
 local nofog = false
 MainTab:Toggle({ Title = "无雾", Default = false, Callback = function(b) nofog = b end })
 
--- ================================================================
--- 核心逻辑
--- ================================================================
 local comb = 0
 function addcomb() comb = comb + 1; if comb > 3 then comb = 1 end end
 
@@ -180,8 +172,12 @@ local ors = game:GetService("RunService").RenderStepped:Connect(function()
                         and (v.Character.HumanoidRootPart.Position - localplr.Character.HumanoidRootPart.Position).Magnitude < 20
                         and v.Character.Humanoid.Health > 0 then
                             adelay(v.Character, sword)
-                            coroutine.wrap(function() addcomb(); ii:InvokeServer(sword, "Hit", v.Character, comb) end)()
-                            task.wait()
+                            -- 修复卡顿：将等待放入协程中
+                            coroutine.wrap(function() 
+                                addcomb()
+                                ii:InvokeServer(sword, "Hit", v.Character, comb) 
+                                task.wait(0.05)
+                            end)()
                         end
                     end
                 end
@@ -224,9 +220,6 @@ local ors = game:GetService("RunService").RenderStepped:Connect(function()
     debug.profileend()
 end)
 
--- ================================================================
--- 移动
--- ================================================================
 MovementTab:Button({
     Title = "反卡住（向上传送）",
     Callback = function()
@@ -239,7 +232,6 @@ MovementTab:Button({
 MovementTab:Paragraph({ Title = "人类最快速度：26（建造回合：30）" })
 MovementTab:Paragraph({ Title = "僵尸最快速度：28（冲锋者为 32）" })
 
--- Speed 滑块：加初始化守卫，避免加载时就改速度
 local speedInited = false
 MovementTab:Slider({
     Title = "速度（已修补）", Step = 1,
@@ -250,9 +242,6 @@ MovementTab:Slider({
     end,
 })
 
--- ================================================================
--- ESP
--- ================================================================
 local zesp, hesp = false, false
 local phl = {}
 local hlf = Instance.new("Folder"); hlf.Name = "hls"; hlf.Parent = game.CoreGui
@@ -350,9 +339,186 @@ local otc = localplr:GetPropertyChangedSignal("Team"):Connect(function()
     end
 end)
 
--- ================================================================
--- 防封
--- ================================================================
+local HB_Players = game:GetService("Players")
+local HB_RunService = game:GetService("RunService")
+local HB_LP = HB_Players.LocalPlayer
+
+local HB_CONFIG = {
+    Size = 10,
+    Transparency = 0.5,
+    Color = Color3.fromRGB(150, 150, 150),
+    TargetParts = {"HumanoidRootPart"}
+}
+
+local HitboxOrig = {}
+local HitboxVisuals = {}
+local hb_enabled = false
+local hb_conn = nil
+
+local function saveOrig(char)
+    local data = HitboxOrig[char]
+    if not data then
+        data = {}
+        HitboxOrig[char] = data
+    end
+    for _, name in ipairs(HB_CONFIG.TargetParts) do
+        if data[name] then continue end
+        local part = char:FindFirstChild(name)
+        if part then
+            data[name] = { Size = part.Size }
+        end
+    end
+end
+
+local function hbApply(char)
+    if not char then return end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hum or hum.Health <= 0 then return end
+    saveOrig(char)
+    
+    local sz = Vector3.new(HB_CONFIG.Size, HB_CONFIG.Size, HB_CONFIG.Size)
+    for _, name in ipairs(HB_CONFIG.TargetParts) do
+        local part = char:FindFirstChild(name)
+        if part then
+            if part.Size ~= sz then
+                part.Size = sz
+            end
+            
+            local visual = HitboxVisuals[char]
+            if not visual or not visual.Parent then
+                visual = Instance.new("BoxHandleAdornment")
+                visual.Adornee = part
+                visual.AlwaysOnTop = false
+                visual.ZIndex = 5
+                visual.Parent = game.CoreGui
+                HitboxVisuals[char] = visual
+            end
+            
+            if visual.Size ~= sz then visual.Size = sz end
+            if visual.Color3 ~= HB_CONFIG.Color then visual.Color3 = HB_CONFIG.Color end
+            if visual.Transparency ~= HB_CONFIG.Transparency then visual.Transparency = HB_CONFIG.Transparency end
+        end
+    end
+end
+
+local function hbReset(char)
+    local data = HitboxOrig[char]
+    if data then
+        for name, orig in pairs(data) do
+            local part = char:FindFirstChild(name)
+            if part then
+                part.Size = orig.Size
+            end
+        end
+        HitboxOrig[char] = nil
+    end
+    
+    local visual = HitboxVisuals[char]
+    if visual then
+        visual:Destroy()
+        HitboxVisuals[char] = nil
+    end
+end
+
+local function hbRefresh()
+    for _, plr in ipairs(HB_Players:GetPlayers()) do
+        if plr ~= HB_LP and plr.Character then
+            hbApply(plr.Character)
+        end
+    end
+end
+
+local function hbSetEnabled(on)
+    hb_enabled = on
+    if hb_conn then hb_conn:Disconnect(); hb_conn = nil end
+    if not on then
+        local chars = {}
+        for char in pairs(HitboxOrig) do table.insert(chars, char) end
+        for _, char in ipairs(chars) do hbReset(char) end
+        return
+    end
+    hbRefresh()
+    hb_conn = HB_RunService.RenderStepped:Connect(function()
+        if not hb_enabled then return end
+        for _, plr in ipairs(HB_Players:GetPlayers()) do
+            if plr ~= HB_LP and plr.Character then
+                local hum = plr.Character:FindFirstChildOfClass("Humanoid")
+                if not hum or hum.Health <= 0 then
+                    hbReset(plr.Character)
+                else
+                    hbApply(plr.Character)
+                end
+            end
+        end
+        for c, v in pairs(HitboxVisuals) do
+            if not v.Parent or not v.Adornee or not v.Adornee.Parent or not c or not c.Parent then
+                if v then v:Destroy() end
+                HitboxVisuals[c] = nil
+                HitboxOrig[c] = nil
+            end
+        end
+    end)
+end
+
+local function hbPlayerAdded(player)
+    if player == HB_LP then return end
+    if hb_enabled and player.Character then
+        task.spawn(function() hbApply(player.Character) end)
+    end
+    table.insert(toc, player.CharacterAdded:Connect(function(char)
+        task.wait(0.5)
+        if hb_enabled then hbApply(char) end
+    end))
+    table.insert(toc, player.CharacterRemoving:Connect(function(char)
+        hbReset(char)
+    end))
+end
+
+for _, plr in ipairs(HB_Players:GetPlayers()) do hbPlayerAdded(plr) end
+table.insert(toc, HB_Players.PlayerAdded:Connect(hbPlayerAdded))
+table.insert(toc, HB_Players.PlayerRemoving:Connect(function(player)
+    if player.Character then
+        hbReset(player.Character)
+    end
+end))
+
+HitboxTab:Toggle({
+    Title = "启用碰撞箱",
+    Default = false,
+    Callback = function(bool)
+        hbSetEnabled(bool)
+    end,
+})
+
+HitboxTab:Slider({
+    Title = "碰撞箱大小",
+    Step = 1,
+    Value = { Min = 1, Max = 50, Default = 10 },
+    Callback = function(n)
+        HB_CONFIG.Size = n
+        if hb_enabled then hbRefresh() end
+    end,
+})
+
+HitboxTab:Slider({
+    Title = "范围透明度",
+    Step = 0.1,
+    Value = { Min = 0, Max = 1, Default = 0.5 },
+    Callback = function(n)
+        HB_CONFIG.Transparency = n
+        if hb_enabled then hbRefresh() end
+    end,
+})
+
+HitboxTab:Colorpicker({
+    Title = "范围颜色",
+    Default = Color3.fromRGB(150, 150, 150),
+    Callback = function(color)
+        HB_CONFIG.Color = color
+        if hb_enabled then hbRefresh() end
+    end,
+})
+
 local oldfunc1, oldfunc2, oldfunc3, oldfunc4, oldfunc5 = nil, nil, nil, nil, nil
 local antij, antiwh, antifm, antifd, antird, antisc, antikb = false, false, false, false, false, false, false
 
@@ -360,9 +526,11 @@ AntiTab:Toggle({
     Title = "反跳跃疲劳", Default = false,
     Callback = function(b)
         antij = b
-        local r = require(localplr.PlayerScripts.Client.Character.JumpFatigue)
-        if antij then oldfunc1 = r.GetCanFatigue; r.GetCanFatigue = function() end
-        else r.GetCanFatigue = oldfunc1 end
+        pcall(function()
+            local r = require(localplr.PlayerScripts.Client.Character.JumpFatigue)
+            if antij then oldfunc1 = r.GetCanFatigue; r.GetCanFatigue = function() end
+            else r.GetCanFatigue = oldfunc1 end
+        end)
     end,
 })
 
@@ -370,9 +538,11 @@ AntiTab:Toggle({
     Title = "反反爬墙", Default = false,
     Callback = function(b)
         antiwh = b
-        local r = require(localplr.PlayerScripts.Client.Game.NoWallhop)
-        if antiwh then oldfunc2 = r.GetIsOnGround; r.GetIsOnGround = function() return true end
-        else r.GetIsOnGround = oldfunc2 end
+        pcall(function()
+            local r = require(localplr.PlayerScripts.Client.Game.NoWallhop)
+            if antiwh then oldfunc2 = r.GetIsOnGround; r.GetIsOnGround = function() return true end
+            else r.GetIsOnGround = oldfunc2 end
+        end)
     end,
 })
 
@@ -390,9 +560,11 @@ AntiTab:Toggle({
     Title = "反坠落伤害", Default = false,
     Callback = function(b)
         antifd = b
-        local r = require(localplr.PlayerScripts.Client.Game.FallDamage)
-        if antifd then oldfunc3 = r.GetFallDamage; r.GetFallDamage = function() return 0 end
-        else r.GetFallDamage = oldfunc3 end
+        pcall(function()
+            local r = require(localplr.PlayerScripts.Client.Game.FallDamage)
+            if antifd then oldfunc3 = r.GetFallDamage; r.GetFallDamage = function() return 0 end
+            else r.GetFallDamage = oldfunc3 end
+        end)
     end,
 })
 
@@ -400,22 +572,24 @@ AntiTab:Toggle({
     Title = "反布娃娃（有时无效）", Default = false,
     Callback = function(b)
         antird = b
-        local r = require(game.ReplicatedStorage.Packages.Ragdoll)
-        if antird then
-            oldfunc4 = r.EnableCharacterRagdoll; r.EnableCharacterRagdoll = function() end
-            oldfunc5 = r.StunCharacter; r.StunCharacter = function() end
-            task.spawn(function()
-                while antird do
-                    task.wait()
-                    if localplr.Character then
-                        pcall(function() r:DisableCharacterRagdoll(localplr.Character) end)
-                        pcall(function() r:CancelCharacterStun(localplr.Character) end)
+        pcall(function()
+            local r = require(game.ReplicatedStorage.Packages.Ragdoll)
+            if antird then
+                oldfunc4 = r.EnableCharacterRagdoll; r.EnableCharacterRagdoll = function() end
+                oldfunc5 = r.StunCharacter; r.StunCharacter = function() end
+                task.spawn(function()
+                    while antird do
+                        task.wait()
+                        if localplr.Character then
+                            pcall(function() r:DisableCharacterRagdoll(localplr.Character) end)
+                            pcall(function() r:CancelCharacterStun(localplr.Character) end)
+                        end
                     end
-                end
-            end)
-        else
-            r.EnableCharacterRagdoll = oldfunc4; r.StunCharacter = oldfunc5
-        end
+                end)
+            else
+                r.EnableCharacterRagdoll = oldfunc4; r.StunCharacter = oldfunc5
+            end
+        end)
     end,
 })
 
@@ -462,9 +636,6 @@ AntiTab:Toggle({
     end,
 })
 
--- ================================================================
--- 人体焊接
--- ================================================================
 WeldTab:Paragraph({ Title = "⚠️ 注意", Desc = "此方法很可能会被修补，请尽快使用！" })
 WeldTab:Paragraph({ Title = "焊接方法最初由 Failedmite 和 Janmandio 发现" })
 WeldTab:Paragraph({ Title = "代码取自 Infinite Yield 中的 \"Welder V2\" 插件" })
@@ -582,8 +753,12 @@ local function WeldTo(TargetPart, Speaker, AnimationId)
         end
     end
     local Weld = {}; local Connection = nil
+    local OldCharProps = {}
     for _, v in pairs(Character:GetDescendants()) do
-        if v:IsA("BasePart") then v.CanCollide = false; v.Massless = true end
+        if v:IsA("BasePart") then 
+            OldCharProps[v] = { Collide = v.CanCollide }
+            v.CanCollide = false; v.Massless = true 
+        end
     end
     Connection = RunService.Heartbeat:Connect(function()
         if not Character.Parent or not TargetPart.Parent then
@@ -598,6 +773,12 @@ local function WeldTo(TargetPart, Speaker, AnimationId)
         if Connection then Connection:Disconnect() end
         if AnimTrack then AnimTrack:Stop(); AnimTrack:Destroy() end
         if Root then Root.AssemblyLinearVelocity = Vector3.zero; Root.AssemblyAngularVelocity = Vector3.zero end
+        -- 修复解除焊接后卡地板的 Bug
+        for part, props in pairs(OldCharProps) do
+            if part and part.Parent then
+                part.CanCollide = props.Collide
+            end
+        end
     end
     return Weld
 end
@@ -635,10 +816,11 @@ WeldTab:Button({
 WeldTab:Input({
     Title = "焊接到玩家", Value = "", Placeholder = "输入玩家名字前缀",
     Callback = function(plrname)
+        if not plrname or plrname == "" then return end
         if CurrentWeld then CurrentWeld:Destroy() end
         local hrp = nil
         for _, v in pairs(game.Players:GetPlayers()) do
-            if (string.sub(v.DisplayName,1,#plrname):lower() == plrname or string.sub(v.Name,1,#plrname):lower() == plrname)
+            if (string.sub(v.DisplayName,1,#plrname):lower() == plrname:lower() or string.sub(v.Name,1,#plrname):lower() == plrname:lower())
             and v.Character and v.Character:FindFirstChild("HumanoidRootPart") then
                 hrp = v.Character.HumanoidRootPart
             end
@@ -658,9 +840,6 @@ WeldTab:Button({
     end,
 })
 
--- ================================================================
--- 其他脚本
--- ================================================================
 OtherTab:Button({
     Title = "执行 Infinite Yield",
     Callback = function()
@@ -680,13 +859,20 @@ if game:GetService("ReplicatedStorage").Remotes:FindFirstChild("ConsoleLog") the
     fcl.Parent = game:GetService("ReplicatedStorage").Remotes
 end
 
--- ================================================================
--- 销毁清理（多 API 兼容）
--- ================================================================
 local function cleanup()
     on = false
     ha = false; bha = false; gha = false
     antisc = false; antird = false
+    hb_enabled = false
+    if hb_conn then hb_conn:Disconnect() end
+    local chars = {}
+    for char in pairs(HitboxOrig) do table.insert(chars, char) end
+    for _, char in ipairs(chars) do hbReset(char) end
+    for c, v in pairs(HitboxVisuals) do
+        if v then v:Destroy() end
+    end
+    HitboxVisuals = {}
+    HitboxOrig = {}
     if hlf then hlf:Destroy() end
     if otc then otc:Disconnect() end
     if ors then ors:Disconnect() end
@@ -708,11 +894,9 @@ local function cleanup()
     if oldfunc5 then pcall(function() require(game.ReplicatedStorage.Packages.Ragdoll).StunCharacter = oldfunc5 end) end
 end
 
--- 尝试多种 WindUI 销毁 API 名
 if not pcall(function() Window:OnDestroy(cleanup) end) then
     if not pcall(function() Window:OnClose(cleanup) end) then
         if not pcall(function() Window:OnDestroying(cleanup) end) then
-            -- 最后兜底：挂到 CoreGui 移除
             pcall(function() game.CoreGui.ChildRemoved:Connect(function(c) if c:IsDescendantOf(Window.Gui or workspace) then cleanup() end end) end)
         end
     end
