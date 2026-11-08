@@ -3,7 +3,7 @@ getgenv().deletewhendupefound = true
 local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
 
 local Window = WindUI:CreateWindow({
-    Title = "Zombies Vs Humans (2AreYouMental110)",
+    Title = "Zombies Vs Humans",
     Icon = "lucide-skull",
     Folder = "ZVH_CN",
     Size = UDim2.fromOffset(640, 500),
