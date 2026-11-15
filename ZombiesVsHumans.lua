@@ -154,7 +154,7 @@ end)
 end)
 end
 self.Content=page
-return self
+return setmetatable({Content=page,Gui=self.Gui,_index=0,_locale=self._locale,_localizers=self._localizers,_langButton=self._langButton,_rootScaleAnim=self._rootScaleAnim,_connections=self._connections,_destroyCallbacks=self._destroyCallbacks,_registerText=self._registerText,_register=self._register},{__index=Window})
 end
 function Window:Button(options)
 options=options or {}
