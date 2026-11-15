@@ -760,7 +760,8 @@ end
 function ZvmUI.CreateWindow(config)
 config=config or {}
 local titleText=config.Title or "ZvmUI"
-local subtitleText=config.Subtitle or "Elastic Interface"
+local subtitleText=config.Subtitle or ""
+local pillText=config.PillTitle or titleText
 local windowSize=config.Size or UDim2.fromOffset(720,480)
 local initialLocale=config.Locale or "zh"
 local playerGui=LocalPlayer:FindFirstChildOfClass("PlayerGui")
@@ -817,7 +818,7 @@ accentBar.BorderSizePixel=0
 accentBar.Parent=titleBar
 createUICorner(accentBar,2)
 local titleLabel=Instance.new("TextLabel")
-titleLabel.Position=UDim2.fromOffset(26,14)
+if subtitleText=="" then titleLabel.Position=UDim2.fromOffset(26,21) else titleLabel.Position=UDim2.fromOffset(26,14) end
 titleLabel.Size=UDim2.new(1,-156,0,22)
 titleLabel.BackgroundTransparency=1
 titleLabel.TextColor3=Theme.Text
@@ -833,6 +834,7 @@ subtitleLabel.TextColor3=Theme.SubText
 subtitleLabel.TextSize=12
 subtitleLabel.Font=Enum.Font.Gotham
 subtitleLabel.TextXAlignment=Enum.TextXAlignment.Left
+subtitleLabel.Visible=(subtitleText~="")
 subtitleLabel.Parent=titleBar
 local function makeTitleButton(parent,text,xOffset,hoverColor)
 local btn=Instance.new("TextButton")
@@ -947,7 +949,7 @@ pillLabel.Font=Enum.Font.GothamMedium
 pillLabel.TextXAlignment=Enum.TextXAlignment.Left
 pillLabel.ZIndex=151
 pillLabel.Parent=pill
-window:_registerText(pillLabel,titleText)
+window:_registerText(pillLabel,pillText)
 local minimized,animating,closing=false,false,false
 local savedCenter=Vector2.new(0,0)
 local function getRootCenter()
@@ -1143,7 +1145,7 @@ local old2=playerGui:FindFirstChild("ZvmUI")
 if old2 then old2:Destroy() end
 end
 end
-local Window=ZvmUI.CreateWindow({Title="Zombies Vs Humans (2AreYouMental110)",Subtitle="私服测试脚本 · 仅供内部反作弊研究",Size=UDim2.fromOffset(720,500)})
+local Window=ZvmUI.CreateWindow({Title="Zombies Vs Humans (2AreYouMental110)",PillTitle="Zombies Vs Humans",Subtitle="",Size=UDim2.fromOffset(720,500)})
 local MainTab=Window:Tab({Text="主菜单"})
 local MovementTab=Window:Tab({Text="移动"})
 local EspTab=Window:Tab({Text="ESP"})
